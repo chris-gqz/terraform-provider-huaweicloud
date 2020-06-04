@@ -702,6 +702,13 @@ func (c *Config) ddsV3Client(region string) (*golangsdk.ServiceClient, error) {
 	})
 }
 
+func (c *Config) GeminiDBV3Client(region string) (*golangsdk.ServiceClient, error) {
+	return huaweisdk.NewGeminiDBV3(c.HwClient, golangsdk.EndpointOpts{
+		Region:       c.determineRegion(region),
+		Availability: c.getHwEndpointType(),
+	})
+}
+
 func (c *Config) RdsV1Client(region string) (*golangsdk.ServiceClient, error) {
 	return huaweisdk.NewRDSV1(c.HwClient, golangsdk.EndpointOpts{
 		Region:       c.determineRegion(region),
