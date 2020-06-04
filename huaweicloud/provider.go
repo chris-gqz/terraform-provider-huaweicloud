@@ -255,6 +255,7 @@ func Provider() terraform.ResourceProvider {
 			"huaweicloud_fw_firewall_group_v2":               resourceFWFirewallGroupV2(),
 			"huaweicloud_fw_policy_v2":                       resourceFWPolicyV2(),
 			"huaweicloud_fw_rule_v2":                         resourceFWRuleV2(),
+			"huaweicloud_geminidb_instance":                  resourceGeminiDBInstanceV3(),
 			"huaweicloud_kms_key_v1":                         resourceKmsKeyV1(),
 			"huaweicloud_dms_queue_v1":                       resourceDmsQueuesV1(),
 			"huaweicloud_dms_group_v1":                       resourceDmsGroupsV1(),
