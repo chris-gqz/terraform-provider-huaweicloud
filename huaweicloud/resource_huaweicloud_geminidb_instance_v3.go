@@ -15,6 +15,8 @@ import (
 	"github.com/huaweicloud/golangsdk/openstack/geminidb/v3/instances"
 )
 
+var projectID string
+
 func resourceGeminiDBInstanceV3() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGeminiDBInstanceV3Create,
@@ -29,14 +31,7 @@ func resourceGeminiDBInstanceV3() *schema.Resource {
 			Create: schema.DefaultTimeout(30 * time.Minute),
 			Delete: schema.DefaultTimeout(30 * time.Minute),
 		},
-
 		Schema: map[string]*schema.Schema{
-			"region": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-				ForceNew: true,
-			},
 			"name": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -69,12 +64,7 @@ func resourceGeminiDBInstanceV3() *schema.Resource {
 			},
 			"mode": {
 				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: true,
-				Default:  "Cluster",
-				ValidateFunc: validation.StringInSlice([]string{
-					"Cluster",
-				}, true),
+				Computed: true,
 			},
 			"flavor": {
 				Type:     schema.TypeString,
@@ -113,7 +103,7 @@ func resourceGeminiDBInstanceV3() *schema.Resource {
 				Required: true,
 				ForceNew: true,
 			},
-			"db": {
+			"datastore": {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: true,
@@ -185,7 +175,7 @@ func resourceGeminiDBInstanceV3() *schema.Resource {
 
 func resourceGeminiDBDataStore(d *schema.ResourceData) instances.DataStore {
 	var dataStore instances.DataStore
-	datastoreRaw := d.Get("db").([]interface{})
+	datastoreRaw := d.Get("datastore").([]interface{})
 	log.Printf("[DEBUG] datastoreRaw: %+v", datastoreRaw)
 	if len(datastoreRaw) == 1 {
 		dataStore.Type = datastoreRaw[0].(map[string]interface{})["engine"].(string)
@@ -206,10 +196,10 @@ func resourceGeminiDBBackupStrategy(d *schema.ResourceData) instances.BackupStra
 	log.Printf("[DEBUG] backupStrategyRaw: %+v", backupStrategyRaw)
 	if len(backupStrategyRaw) == 1 {
 		backupStrategy.StartTime = backupStrategyRaw[0].(map[string]interface{})["start_time"].(string)
-		backupStrategy.KeepDays = backupStrategyRaw[0].(map[string]interface{})["keep_days"].(string)
+		backupStrategy.KeepDays = strconv.Itoa(backupStrategyRaw[0].(map[string]interface{})["keep_days"].(int))
 	} else {
 		backupStrategy.StartTime = "00:00-01:00"
-		backupStrategy.KeepDays = "6"
+		backupStrategy.KeepDays = "7"
 	}
 	log.Printf("[DEBUG] backupStrategy: %+v", backupStrategy)
 	return backupStrategy
@@ -291,6 +281,10 @@ func resourceGeminiDBInstanceV3Create(d *schema.ResourceData, meta interface{}) 
 
 	_, err = stateConf.WaitForState()
 	if err != nil {
+		errDelete := resourceGeminiDBInstanceV3Delete(d, meta)
+		if errDelete != nil {
+			return fmt.Errorf("Error delete geminidb fail err: %s ", err)
+		}
 		return fmt.Errorf(
 			"Error waiting for instance (%s) to become ready: %s ",
 			instance.Id, err)
@@ -300,7 +294,10 @@ func resourceGeminiDBInstanceV3Create(d *schema.ResourceData, meta interface{}) 
 	tagRaw := d.Get("tags").(map[string]interface{})
 	if len(tagRaw) > 0 {
 		taglist := expandGeminiDBTags(tagRaw)
-		if tagErr := tags.Create(client, "GeminiDB", instance.Id, taglist).ExtractErr(); tagErr != nil {
+		projectID = client.ProjectID
+		client.ProjectID = ""
+		client.ResourceBase = strings.TrimRight(client.ResourceBase, "/")
+		if tagErr := tags.Create(client, "instances", instance.Id, taglist).ExtractErr(); tagErr != nil {
 			return fmt.Errorf("Error setting tags of GeminiDB %q: %s", instance.Id, tagErr)
 		}
 	}
@@ -312,23 +309,28 @@ func resourceGeminiDBInstanceV3Read(d *schema.ResourceData, meta interface{}) er
 	config := meta.(*Config)
 	client, err := config.GeminiDBV3Client(GetRegion(d, config))
 	if err != nil {
-		return fmt.Errorf("Error creating HuaweiCloud DDS client: %s", err)
+		return fmt.Errorf("Error creating HuaweiCloud GeminiDB client: %s", err)
 	}
 
 	instanceID := d.Id()
 	opts := instances.ListGeminiDBInstanceOpts{
 		Id: instanceID,
 	}
+	client.ProjectID = projectID
+	client.ResourceBase = strings.TrimRight(client.ResourceBase, "/") + "/" + projectID
+	if !strings.HasSuffix(client.ResourceBase, "/") {
+		client.ResourceBase = client.ResourceBase + "/"
+	}
 	allPages, err := instances.List(client, &opts).AllPages()
 	if err != nil {
-		return fmt.Errorf("Error fetching DDS instance: %s", err)
+		return fmt.Errorf("Error fetching GeminiDB instance: %s", err)
 	}
 	instances, err := instances.ExtractGeminiDBInstances(allPages)
 	if err != nil {
-		return fmt.Errorf("Error extracting DDS instance: %s", err)
+		return fmt.Errorf("Error extracting GeminiDB instance: %s", err)
 	}
 	if instances.TotalCount == 0 {
-		return fmt.Errorf("Error fetching DDS instance: deleted")
+		return fmt.Errorf("Error fetching GeminiDB instance: deleted")
 	}
 	insts := instances.Instances
 	instance := insts[0]
@@ -352,7 +354,7 @@ func resourceGeminiDBInstanceV3Read(d *schema.ResourceData, meta interface{}) er
 		"storage_engine": "rocksDB",
 	}
 	dbList = append(dbList, db)
-	d.Set("db", dbList)
+	d.Set("datastore", dbList)
 
 	nodesList := make([]map[string]interface{}, 0, 1)
 	if len(instance.Groups) > 0 {
@@ -379,7 +381,6 @@ func resourceGeminiDBInstanceV3Read(d *schema.ResourceData, meta interface{}) er
 	d.Set("backup_strategy", backupStrategyList)
 
 	//save geminidb tags
-
 	client.ProjectID = ""
 	client.ResourceBase = strings.TrimRight(client.ResourceBase, "/")
 	resourceTags, err := tags.Get(client, "instances", d.Id()).Extract()
@@ -402,7 +403,7 @@ func resourceGeminiDBInstanceV3Delete(d *schema.ResourceData, meta interface{}) 
 	config := meta.(*Config)
 	client, err := config.GeminiDBV3Client(GetRegion(d, config))
 	if err != nil {
-		return fmt.Errorf("Error creating HuaweiCloud DDS client: %s ", err)
+		return fmt.Errorf("Error creating HuaweiCloud GeminiDB client: %s ", err)
 	}
 
 	instanceId := d.Id()
@@ -464,7 +465,9 @@ func resourceGeminiDBV3Update(d *schema.ResourceData, meta interface{}) error {
 		newRaw := new.(map[string]interface{})
 		if len(newRaw) > 0 {
 			taglist := expandGeminiDBTags(newRaw)
-			if tagErr := tags.Create(client, "geminidb", d.Id(), taglist).ExtractErr(); tagErr != nil {
+			client.ProjectID = ""
+			client.ResourceBase = strings.TrimRight(client.ResourceBase, "/")
+			if tagErr := tags.Create(client, "instances", d.Id(), taglist).ExtractErr(); tagErr != nil {
 				return fmt.Errorf("Error setting tags of GeminiDB %q: %s", d.Id(), tagErr)
 			}
 		}
